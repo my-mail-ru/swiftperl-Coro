@@ -25,23 +25,19 @@ class PerlCoroTests : EmbeddedTestCase {
 	}
 
 	func testCoro() throws {
-		perl.withUnsafeInterpreterPointer {
-			UnsafeInterpreter.main = $0
-		}
-		try PerlCoro.initialize()
 		var result = [Int]()
-		let c1 = PerlCoro(PerlSub {
+		let c1 = Coro(PerlSub {
 			(a: Int, b: Int) -> Int in
 			result.append(1)
-			PerlCoro.cede()
+			Coro.cede()
 			result.append(3)
 			return a + b
 		}, args: 10, 15)
 		c1.ready()
-		let c2 = PerlCoro(PerlSub {
+		let c2 = Coro(PerlSub {
 			(a: Int, b: Int) -> Int in
 			result.append(2)
-			PerlCoro.cede()
+			Coro.cede()
 			result.append(4)
 			return a + b
 		}, args: 18, 42)

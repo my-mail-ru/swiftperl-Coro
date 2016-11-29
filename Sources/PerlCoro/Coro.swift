@@ -2,7 +2,7 @@ import CPerlCoro
 import Perl
 
 // TODO generic on function argument
-public final class PerlCoro : PerlObject, PerlNamedClass {
+public final class Coro : PerlObject, PerlNamedClass {
 	public static let perlClassName = "Coro"
 
 	public enum CoroError : Error {
@@ -10,23 +10,36 @@ public final class PerlCoro : PerlObject, PerlNamedClass {
 		case coroApiVersionMismatch(used: (ver: Int32, rev: Int32), compiled: (ver: Int32, rev: Int32))
 	}
 
-	static var coroApi: UnsafeMutablePointer<CoroAPI>!
-	static var perl: UnsafeInterpreterPointer!
+	static var coroApi: UnsafeMutablePointer<CoroAPI> = try! getCoroApi()
+	static var perl: UnsafeInterpreterPointer = UnsafeInterpreter.current
 
-	public static func initialize(perl: UnsafeInterpreterPointer = UnsafeInterpreter.current) throws { // FIXME = UnsafeInterpreter.main?
+	public static func initialize(perl: UnsafeInterpreterPointer = UnsafeInterpreter.current) throws {
 		self.perl = perl
-		perl.pointee.loadModule("Coro")
+		coroApi = try getCoroApi()
+	}
+
+	static var loadModuleOnce: Void = loadModule(perl: perl)
+
+	private static func getCoroApi() throws -> UnsafeMutablePointer<CoroAPI> {
+		_ = loadModuleOnce
 		guard let sv = perl.pointee.getSV("Coro::API") else {
-			throw PerlCoro.CoroError.coroApiNotFound
+			throw Coro.CoroError.coroApiNotFound
 		}
-		coroApi = UnsafeMutablePointer<CoroAPI>(bitPattern: Int(unchecked: sv))
+		let coroApi = UnsafeMutablePointer<CoroAPI>(bitPattern: Int(unchecked: sv))!
 		guard coroApi.pointee.ver == CORO_API_VERSION && coroApi.pointee.rev >= CORO_API_REVISION else {
-			throw PerlCoro.CoroError.coroApiVersionMismatch(
+			throw Coro.CoroError.coroApiVersionMismatch(
 				used: (ver: coroApi.pointee.ver, rev: coroApi.pointee.rev),
 				compiled: (ver: CORO_API_VERSION, rev: CORO_API_REVISION)
 			)
 		}
+		return coroApi
 	}
+
+	public static var main: Coro = {
+		_ = loadModuleOnce
+		let sv = perl.pointee.getSV("Coro::main")!
+		return Coro(incUnchecked: sv, perl: Coro.perl)
+	}()
 
 	public static func schedule() {
 		coroApi.pointee.schedule(perl)
@@ -42,8 +55,8 @@ public final class PerlCoro : PerlObject, PerlNamedClass {
 		return coroApi.pointee.nready
 	}
 
-	public static var current: PerlCoro {
-		return PerlCoro(incUnchecked: coroApi.pointee.current, perl: PerlCoro.perl)
+	public static var current: Coro {
+		return Coro(incUnchecked: coroApi.pointee.current, perl: Coro.perl)
 	}
 
 	public static var readyhook: @convention(c) () -> () {
@@ -51,7 +64,19 @@ public final class PerlCoro : PerlObject, PerlNamedClass {
 		set { coroApi.pointee.readyhook = newValue }
 	}
 
+	@discardableResult
+	public static func async(_ body: @escaping () -> ()) -> Coro {
+		let coro = Coro(body)
+		coro.ready()
+		return coro
+	}
+
+	public convenience init(_ body: @escaping () -> ()) {
+		self.init(PerlSub(body: body))
+	}
+
 	public convenience init(_ cv: PerlSub, args: PerlSvConvertible?...) {
+		_ = Coro.loadModuleOnce
 		var args = args
 		args.insert(cv, at: 0)
 		try! self.init(method: "new", args: args)
@@ -59,7 +84,7 @@ public final class PerlCoro : PerlObject, PerlNamedClass {
 
 	@discardableResult
 	public func ready() -> Bool {
-		return withUnsafeSvPointer { sv, perl in PerlCoro.coroApi.pointee.ready!(perl, sv) != 0 }
+		return withUnsafeSvPointer { sv, perl in Coro.coroApi.pointee.ready!(perl, sv) != 0 }
 	}
 
 	public func suspend() { return try! call(method: "suspend") }
@@ -69,7 +94,7 @@ public final class PerlCoro : PerlObject, PerlNamedClass {
 	public var isZombie: Bool { return try! call(method: "is_zombie") }
 
 	public var isReady: Bool {
-		return withUnsafeSvPointer { sv, perl in PerlCoro.coroApi.pointee.is_ready!(perl, sv) != 0 }
+		return withUnsafeSvPointer { sv, perl in Coro.coroApi.pointee.is_ready!(perl, sv) != 0 }
 	}
 
 	public var isRunning: Bool { return try! call(method: "is_running") }
